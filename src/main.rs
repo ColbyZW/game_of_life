@@ -1,15 +1,18 @@
 extern crate sdl2;
-use sdl2::render::{Canvas, TextureCreator, Texture, TextureAccess};
-use sdl2::rect::{Point, Rect};
+use sdl2::render::TextureCreator;
+use sdl2::rect::Rect;
 use sdl2::pixels::Color;
-use sdl2::video::{Window, WindowContext};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
+use sdl2::mouse::MouseButton;
 use std::time::Instant;
+use std::fs::File;
+use std::io::prelude::*;
+mod texture;
 
-const HEIGHT: u32 = 50;
-const WIDTH: u32 = 50;
-const SQ_SIZE: u32 = 16;
+pub const HEIGHT: u32 = 50;
+pub const WIDTH: u32 = 50;
+pub const SQ_SIZE: u32 = 16;
 
 enum State {
     Paused,
@@ -29,15 +32,63 @@ impl GameState {
         }
     }
 
-    pub fn draw_point(self: &mut Self, x: i32, y: i32) {
+    pub fn clear(self: &mut Self) {
+        for data in &mut self.screen {
+            *data = 0;
+        }
+    }
+
+    pub fn save(self: &mut Self) {
+        if let Ok(mut file) = File::create("save.dat") {
+            for data in self.screen {
+                if let Err(_) = file.write(&data.to_be_bytes()) {
+                    panic!("Failed to save game state");
+                }
+            }
+        }
+    }
+
+    pub fn load(self: &mut Self) {
+        if let Ok(mut file) = File::open("save.dat") {
+            for i in 0..self.screen.len() {
+                let mut buf: [u8; 4] = [0; 4];
+                if let Err(_) = file.read_exact(&mut buf) {
+                    panic!("Failed to read from file");
+                }
+                let data = u32::from_be_bytes(buf);
+                self.screen[i] = data;
+            }
+        }
+    }
+
+    pub fn draw_point(self: &mut Self, x: i32, y: i32, erase: bool) {
         let x = (x as u32 / SQ_SIZE) as u32;
         let y = (y as u32 / SQ_SIZE) as u32;
         if x <= WIDTH && y <= HEIGHT {
             let val = &mut self.screen[(x + (y * WIDTH)) as usize];
-            if *val == 0 {
-                *val = 1;
+            if !erase {
+                if *val == 0 || *val == 2 {
+                    *val = 1;
+                }
             } else {
                 *val = 0;
+            }
+        }
+    }
+
+    pub fn hover(self: &mut Self, x: i32, y: i32) {
+        let x = (x as u32 / SQ_SIZE) as u32;
+        let y = (y as u32 / SQ_SIZE) as u32;
+        if x <= WIDTH && y <= HEIGHT {
+            let ind: usize = (x + (y * WIDTH)) as usize;
+            for (_, val) in self.screen.iter_mut().enumerate() {
+                if *val == 2 {
+                    *val = 0;
+                }
+            }
+            let val = self.screen[ind];
+            if val == 0 {
+                self.screen[ind] = 2;
             }
         }
     }
@@ -103,55 +154,7 @@ impl GameState {
     }
 }
 
-fn create_cell<'a>(creator: &'a TextureCreator<WindowContext>, canvas: &mut Canvas<Window>) -> Result<Texture<'a>, String> {
-    if let Ok(mut texture) = creator.create_texture(None, TextureAccess::Target, SQ_SIZE, SQ_SIZE) {
-        
-        let _ = canvas.with_texture_canvas(&mut texture, |cnv| {
 
-            cnv.set_draw_color(Color::RGB(0, 0, 0));
-            for i in 1..SQ_SIZE-1 {
-                for j in 1..SQ_SIZE-1 {
-                    cnv.draw_point(Point::new(j as i32, i as i32)).expect("Failed to draw");
-                }
-            }
-            cnv.set_draw_color(Color::RGB(128, 128, 128));
-            for i in 0..SQ_SIZE {
-                cnv.draw_point(Point::new(i as i32, (SQ_SIZE - 1) as i32)).expect("Failed to draw");
-                cnv.draw_point(Point::new(i as i32, 0)).expect("Failed to draw");
-                cnv.draw_point(Point::new(0, i as i32)).expect("Failed to draw");
-                cnv.draw_point(Point::new((SQ_SIZE - 1) as i32, i as i32)).expect("Failed to draw");
-            }
-        });
-
-
-        return Ok(texture);
-    };
-
-    Err("Unable to create texture".to_string())
-}
-
-fn create_grid<'a>(creator: &'a TextureCreator<WindowContext>, canvas: &mut Canvas<Window>) -> Result<Texture<'a>, String> {
-    if let Ok(mut texture) = creator.create_texture(None, TextureAccess::Target, SQ_SIZE, SQ_SIZE) {
-        
-        let _ = canvas.with_texture_canvas(&mut texture, |cnv| {
-            cnv.set_draw_color(Color::RGB(255, 255, 255));
-            cnv.clear();
-
-            cnv.set_draw_color(Color::RGB(128, 128, 128));
-            for i in 0..SQ_SIZE {
-                cnv.draw_point(Point::new(i as i32, (SQ_SIZE - 1) as i32)).expect("Failed to draw");
-                cnv.draw_point(Point::new(i as i32, 0)).expect("Failed to draw");
-                cnv.draw_point(Point::new(0, i as i32)).expect("Failed to draw");
-                cnv.draw_point(Point::new((SQ_SIZE - 1) as i32, i as i32)).expect("Failed to draw");
-            }
-        });
-
-
-        return Ok(texture);
-    };
-
-    Err("Unable to create texture".to_string())
-}
 
 
 fn main() {
@@ -172,8 +175,9 @@ fn main() {
         .unwrap();
 
     let texture_creator: TextureCreator<_> = canvas.texture_creator();
-    let texture = create_grid(&texture_creator, &mut canvas).unwrap();
-    let cell = create_cell(&texture_creator, &mut canvas).unwrap();
+    let grid = texture::create_cell(&texture_creator, &mut canvas, SQ_SIZE, Color::RGB(255, 255, 255)).unwrap();
+    let cell = texture::create_cell(&texture_creator, &mut canvas, SQ_SIZE, Color::RGB(0, 0, 0)).unwrap();
+    let hover = texture::create_cell(&texture_creator, &mut canvas, SQ_SIZE, Color::RGB(128, 128, 128)).unwrap();
     let mut game = GameState::init();
 
     'main: loop {
@@ -183,9 +187,29 @@ fn main() {
         for event in event_pump.poll_iter() {
             match event {
                 Event::KeyDown { keycode: Some(Keycode::Escape), ..} => break 'main,
-                Event::MouseButtonDown { x, y, ..} => {
+                Event::MouseButtonDown { x, y, mouse_btn, .. } => {
                     match game.state {
-                        State::Paused => {game.draw_point(x, y)},
+                        State::Paused => {
+                            match mouse_btn {
+                                MouseButton::Left => {game.draw_point(x, y, false)},
+                                MouseButton::Right => {game.draw_point(x, y, true)},
+                                _ => {},
+                            }
+                        },
+                        _ => {}
+                    }
+                },
+                Event::MouseMotion { x, y, mousestate, .. } => {
+                    match game.state {
+                        State::Paused => {
+                            if mousestate.left() {
+                                game.draw_point(x, y, false);
+                            } else if mousestate.right() {
+                                game.draw_point(x, y, true);
+                            } else {
+                                game.hover(x, y);
+                            }
+                        },
                         _ => {}
                     }
                 },
@@ -194,6 +218,21 @@ fn main() {
                         State::Paused => { game.state = State::Playing },
                         State::Playing => { game.state = State::Paused },
                     }
+                },
+                Event::KeyDown { keycode: Some(Keycode::S), .. } => {
+                    if let State::Paused = game.state {
+                        game.save();
+                    };
+                },
+                Event::KeyDown { keycode: Some(Keycode::L), .. } => {
+                    if let State::Paused = game.state {
+                        game.load();
+                    };
+                },
+                Event::KeyDown { keycode: Some(Keycode::R), .. } => {
+                    if let State::Paused = game.state {
+                        game.clear();
+                    };
                 },
                 _ => {},
             }
@@ -211,9 +250,20 @@ fn main() {
                         SQ_SIZE,
                     ),
                 ).unwrap();
+            } else if *point == 2 {
+                canvas.copy(
+                    &hover,
+                    None,
+                    Rect::new(
+                        ((i as u32 % WIDTH) * SQ_SIZE) as i32,
+                        ((i as u32 / WIDTH) * SQ_SIZE) as i32,
+                        SQ_SIZE,
+                        SQ_SIZE,
+                    ),
+                ).unwrap();
             } else {
                 canvas.copy(
-                    &texture, 
+                    &grid, 
                     None, 
                     Rect::new(
                         ((i as u32 % WIDTH) * SQ_SIZE) as i32,
